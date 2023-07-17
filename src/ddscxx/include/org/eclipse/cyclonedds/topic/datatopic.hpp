@@ -18,16 +18,14 @@
 #include <atomic>
 
 #include "dds/ddsrt/md5.h"
+#include "dds/ddsc/dds_loaned_sample.h"
+#include "dds/ddsc/dds_psmx.h"
 #include "org/eclipse/cyclonedds/core/cdr/basic_cdr_ser.hpp"
 #include "org/eclipse/cyclonedds/core/cdr/extended_cdr_v1_ser.hpp"
 #include "org/eclipse/cyclonedds/core/cdr/extended_cdr_v2_ser.hpp"
 #include "org/eclipse/cyclonedds/core/cdr/fragchain.hpp"
 #include "org/eclipse/cyclonedds/topic/TopicTraits.hpp"
 #include "org/eclipse/cyclonedds/topic/hash.hpp"
-
-#ifdef DDSCXX_HAS_SHM
-#include "dds/ddsi/ddsi_shm_transport.h"
-#endif
 
 constexpr size_t CDR_HEADER_SIZE = 4U;
 #define BO_LITTLE   0X01
@@ -632,47 +630,44 @@ void serdata_get_keyhash(
   }
 }
 
-#ifdef DDSCXX_HAS_SHM
 template<typename T>
-uint32_t serdata_iox_size(const struct ddsi_serdata* d)
-{
-  assert(sizeof(T) == d->type->iox_size);
-  return d->type->iox_size;
-}
-
-template<typename T>
-ddsi_serdata * serdata_from_iox_buffer(
+ddsi_serdata * serdata_from_loaned_sample(
     const struct ddsi_sertype * typecmn, enum ddsi_serdata_kind kind,
-    void * sub, void * iox_buffer)
+    const char *sample, struct dds_loaned_sample *loan, bool force_serialization)
 {
   try {
     auto d = new ddscxx_serdata<T>(typecmn, kind);
 
-    // serdata from the loaned sample (when using iceoryx)
-    d->iox_chunk = iox_buffer;
+    // TODO
+    (void) sample;
+    (void) loan;
+    (void) force_serialization;
 
-    // Update the iox subscriber, when constructing the serdata in the case of sample received
-    // from iceoryx
-    if (sub != nullptr) {
-      d->iox_subscriber = sub;
-    }
+    // // serdata from the loaned sample (when using iceoryx)
+    // d->iox_chunk = iox_buffer;
 
-    // key handling
-    if (typecmn->fixed_size) {
-      const auto& msg = *static_cast<const T*>(d->iox_chunk);
-      d->key_md5_hashed() = to_key(msg, d->key());
-      d->populate_hash();
-    } else {
-      T msg;
-      iceoryx_header_t *iox_header = iceoryx_header_from_chunk(d->iox_chunk);
-      if (deserialize_sample_from_buffer(d->iox_chunk, iox_header->data_size, msg, kind)) {
-        d->key_md5_hashed() = to_key(msg, d->key());
-        d->populate_hash();
-      } else {
-        delete d;
-        d = nullptr;
-      }
-    }
+    // // Update the iox subscriber, when constructing the serdata in the case of sample received
+    // // from iceoryx
+    // if (sub != nullptr) {
+    //   d->iox_subscriber = sub;
+    // }
+
+    // // key handling
+    // if (typecmn->fixed_size) {
+    //   const auto& msg = *static_cast<const T*>(d->iox_chunk);
+    //   d->key_md5_hashed() = to_key(msg, d->key());
+    //   d->populate_hash();
+    // } else {
+    //   T msg;
+    //   iceoryx_header_t *iox_header = iceoryx_header_from_chunk(d->iox_chunk);
+    //   if (deserialize_sample_from_buffer(d->iox_chunk, iox_header->data_size, msg, kind)) {
+    //     d->key_md5_hashed() = to_key(msg, d->key());
+    //     d->populate_hash();
+    //   } else {
+    //     delete d;
+    //     d = nullptr;
+    //   }
+    // }
 
     return d;
   }
@@ -680,7 +675,32 @@ ddsi_serdata * serdata_from_iox_buffer(
     return nullptr;
   }
 }
-#endif
+
+template<typename T>
+ddsi_serdata * serdata_from_psmx(
+    const struct ddsi_sertype * typecmn, struct dds_loaned_sample *loaned_sample)
+{
+  struct dds_psmx_metadata *md = loaned_sample->metadata;
+  enum ddsi_serdata_kind kind;
+  switch (md->sample_state)
+  {
+    case DDS_LOANED_SAMPLE_STATE_SERIALIZED_KEY:
+      kind = SDK_KEY;
+      break;
+    case DDS_LOANED_SAMPLE_STATE_RAW:
+    case DDS_LOANED_SAMPLE_STATE_SERIALIZED_DATA:
+      kind = SDK_DATA;
+      break;
+    case DDS_LOANED_SAMPLE_STATE_UNITIALIZED:
+      return nullptr;
+  }
+
+  auto d = new ddscxx_serdata<T>(typecmn, kind);
+
+  // TODO
+
+  return d;
+}
 
 template<typename T,
          class S >
@@ -700,11 +720,9 @@ struct ddscxx_serdata_ops: public ddsi_serdata_ops {
   &serdata_untyped_to_sample<T>,
   &serdata_free<T>,
   &serdata_print<T>,
-  &serdata_get_keyhash<T>
-#ifdef DDSCXX_HAS_SHM
-  , &serdata_iox_size<T>
-  , &serdata_from_iox_buffer<T>
-#endif
+  &serdata_get_keyhash<T>,
+  &serdata_from_loaned_sample<T>,
+  &serdata_from_psmx<T>
   } { ; }
 };
 
@@ -1031,6 +1049,7 @@ ddscxx_sertype<T,S>::ddscxx_sertype()
       flags);
 
   allowed_data_representation = TopicTraits<T>::allowableEncodings();
+  data_type_props = TopicTraits<T>::getDataTypeProperties();
 
 #ifdef DDSCXX_HAS_SHM
   // update the size of the type, if its fixed

@@ -7,7 +7,7 @@
 // http://www.eclipse.org/org/documents/edl-v10.php.
 //
 // SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
- 
+
 #ifndef CDR_ENUMS_HPP_
 #define CDR_ENUMS_HPP_
 
