@@ -224,6 +224,14 @@ install(
 
 find_package(CycloneDDS REQUIRED)
 
+option(ENABLE_ICEORYX "Enable testing PSMX with Iceoryx plugin" OFF)
+if(ENABLE_ICEORYX)
+  find_package(iceoryx_posh REQUIRED)
+  find_package(iceoryx_posh_testing REQUIRED)
+  message(STATUS "Found iceoryx_posh: (found version \"${iceoryx_posh_VERSION}\")")
+  set(ENABLE_ICEORYX ON)
+endif()
+
 get_target_property(cyclonedds_has_typelib CycloneDDS::ddsc TYPELIB_IS_AVAILABLE)
 mark_as_advanced(cyclonedds_has_typelib)
 option(ENABLE_TYPELIB "Enable Type Library support" ${cyclonedds_has_typelib})
